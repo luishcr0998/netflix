@@ -48,10 +48,6 @@ Where λ is a regularization parameter to prevent overfitting.
 
 ### 2. Gaussian Mixture Models (GMMs)
 
-<p align="center">
-  <img src="https://miro.medium.com/max/1400/1*mEIWwyolHOdY3TmBus7HtQ.png" alt="Gaussian Mixture Model" width="600"/>
-</p>
-
 GMMs model the probability distribution of user ratings as a mixture of Gaussian distributions:
 
 ```
