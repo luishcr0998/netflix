@@ -152,22 +152,6 @@ Netflix/
   - MF is preferred for simpler implementations and better interpretability
   - GMM is suitable when probabilistic interpretation is required
 
-## 🔮 Future Work
-
-- Implement hybrid models combining collaborative and content-based filtering
-- Incorporate temporal dynamics to account for changing user preferences
-- Explore deep learning approaches (autoencoders, neural collaborative filtering)
-- Optimize hyperparameters using cross-validation
-
-## 📚 References
-
-- Y. Koren, R. Bell, and C. Volinsky, "Matrix Factorization Techniques for Recommender Systems," Computer, vol. 42, no. 8, pp. 30-37, 2009.
-- C. Bishop, "Pattern Recognition and Machine Learning," Springer, 2006.
-- Netflix Prize: https://www.netflixprize.com/
-
-## 👤 Author
-
-[Your Name](https://github.com/yourusername) - Feel free to contact me with any questions!
 
 ## 📄 License
 
