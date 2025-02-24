@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GMM Visualization - Estabilizado</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: transparent;
+    }
+    #gmmCanvas {
+      display: block;
+      background-color: transparent;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gmmCanvas" width="600" height="600"></canvas>
+
+<script>
+/*************************************************************
+ *                 CONFIGURAÇÕES GERAIS
+ *************************************************************/
+const NUM_POINTS  = 1400;
+const CLUSTERS    = 5;
+const ITERATIONS  = 10;
+const INTERVAL_MS = 588; // 100% mais rápido que 1176ms
+
+
+/* Faixa de desenho para folga nas bordas */
+const MIN_COORD = -1.75; 
+const MAX_COORD =  1.75;
+
+/* Cores vibrantes para cada cluster */
+const CLUSTER_COLORS = [
+  "#e41a1c", // vermelho
+  "#377eb8", // azul
+  "#4daf4a", // verde
+  "#984ea3", // roxo
+  "#ff7f00"  // laranja
+];
+
+/* Camadas de elipse com opacidades para shading */
+const ELLIPSE_LEVELS = [2.5, 2, 1.5, 1];
+const ELLIPSE_ALPHAS = [0.05, 0.1, 0.15, 0.25];
+
+/* Limite máximo para os raios das elipses (reduzido para 0.5) */
+const MAX_ELLIPSE_RADIUS = 0.5;
+
+/*************************************************************
+ *                VARIÁVEIS GLOBAIS
+ *************************************************************/
+let canvas, ctx;
+let points = [];       // { x, y, clusterIndex }
+let mus = [];          // Centróides dos clusters
+let covariances = [];  // Matrizes de covariância 2x2 para cada cluster
+let iteration = 0;
+let intervalId = null;
+
+/*************************************************************
+ *   1) GERAÇÃO DE DADOS
+ *   Os pontos são amostrados a partir de 5 gaussianas com centros
+ *   mais próximos do centro da imagem.
+ *************************************************************/
+const TRUE_MEANS = [
+  { x: -0.4,  y:  0.4 },
+  { x:  0.4,  y:  0.4 },
+  { x: -0.4,  y: -0.4 },
+  { x:  0.4,  y: -0.4 },
+  { x:  0.0,  y:  0.0 }
+];
+const TRUE_STD = 0.3;
+
+/* Função Box-Muller para gerar números gaussianos */
+function randomGaussian(mean = 0, std = 1) {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const r = Math.sqrt(-2 * Math.log(u1));
+  const th = 2 * Math.PI * u2;
+  return mean + std * (r * Math.cos(th));
+}
+
+/*************************************************************
+ *   2) INICIALIZAÇÃO: Cria os pontos e inicializa os clusters
+ *************************************************************/
+function init() {
+  points = [];
+  for (let i = 0; i < NUM_POINTS; i++) {
+    const k = Math.floor(Math.random() * 5);
+    const mx = TRUE_MEANS[k].x;
+    const my = TRUE_MEANS[k].y;
+    let x = randomGaussian(mx, TRUE_STD);
+    let y = randomGaussian(my, TRUE_STD);
+    // "Pull" para aproximar os pontos do centro (0,0) – PULL_FACTOR de 0.1
+    const PULL_FACTOR = 0.1;
+    x *= (1 - PULL_FACTOR);
+    y *= (1 - PULL_FACTOR);
+    // Rotaciona 23 graus em sentido horário
+    const angle = 23 * Math.PI / 180;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const rotatedX = x * cosA + y * sinA;
+    const rotatedY = -x * sinA + y * cosA;
+    x = rotatedX;
+    y = rotatedY;
+    
+    points.push({ x, y, clusterIndex: -1 });
+  }
+  
+  // Inicializa os centróides de forma a ficarem distantes uns dos outros,
+  // mas sem coincidirem exatamente com os verdadeiros clusters.
+  mus = generateInitialCentroids(CLUSTERS, 0.8); // mínimo 0.8 de distância entre eles
+  
+  // Inicializa as covariâncias como matrizes identidade
+  covariances = [];
+  for (let k = 0; k < CLUSTERS; k++) {
+    covariances.push([[1, 0], [0, 1]]);
+  }
+  
+  iteration = 0;
+  draw();
+}
+
+/* Gera centróides aleatórios em [-1,1] garantindo uma distância mínima */
+function generateInitialCentroids(num, minDist) {
+  let centroids = [];
+  let attempts = 0;
+  while (centroids.length < num && attempts < 1000) {
+    let candidate = { x: Math.random() * 2 - 1, y: Math.random() * 2 - 1 };
+    let tooClose = false;
+    for (let c of centroids) {
+      let dx = candidate.x - c.x;
+      let dy = candidate.y - c.y;
+      if (Math.sqrt(dx * dx + dy * dy) < minDist) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (!tooClose) {
+      centroids.push(candidate);
+    }
+    attempts++;
+  }
+  // Se não conseguir gerar todos com o mínimo, completa sem restrição
+  while (centroids.length < num) {
+    centroids.push({ x: Math.random() * 2 - 1, y: Math.random() * 2 - 1 });
+  }
+  return centroids;
+}
+
+/*************************************************************
+ *   3) GAUSSIAN PROBABILIDADE (aproximada)
+ *************************************************************/
+function gaussianProb(pt, mu, cov) {
+  const a = cov[0][0], b = cov[0][1],
+        c = cov[1][0], d = cov[1][1];
+  const det = a * d - b * c;
+  if (Math.abs(det) < 1e-12) return 0;
+  const invA = d / det, invB = -b / det, invC = -c / det, invD = a / det;
+  const dx = pt.x - mu.x, dy = pt.y - mu.y;
+  const e1 = invA * dx + invB * dy, e2 = invC * dx + invD * dy;
+  const mahal = e1 * dx + e2 * dy;
+  return Math.exp(-0.5 * mahal);
+}
+
+/*************************************************************
+ *   4) E-STEP: Atribui cada ponto ao cluster mais provável
+ *************************************************************/
+function eStep() {
+  for (let i = 0; i < points.length; i++) {
+    let bestK = -1;
+    let bestVal = -Infinity;
+    for (let k = 0; k < CLUSTERS; k++) {
+      const p = gaussianProb(points[i], mus[k], covariances[k]);
+      if (p > bestVal) {
+        bestVal = p;
+        bestK = k;
+      }
+    }
+    points[i].clusterIndex = bestK;
+  }
+}
+
+/*************************************************************
+ *   5) M-STEP: Recalcula centróides e covariâncias
+ *************************************************************/
+function mStep() {
+  let sums = new Array(CLUSTERS).fill(null).map(() => ({ x: 0, y: 0, count: 0 }));
+  for (let pt of points) {
+    sums[pt.clusterIndex].x += pt.x;
+    sums[pt.clusterIndex].y += pt.y;
+    sums[pt.clusterIndex].count++;
+  }
+  
+  for (let k = 0; k < CLUSTERS; k++) {
+    if (sums[k].count > 0) {
+      mus[k].x = sums[k].x / sums[k].count;
+      mus[k].y = sums[k].y / sums[k].count;
+    }
+  }
+  
+  for (let k = 0; k < CLUSTERS; k++) {
+    // Se um cluster tiver menos de 10 pontos, usa a identidade
+    if (sums[k].count < 10) {
+      covariances[k] = [[1, 0], [0, 1]];
+      continue;
+    }
+    let sumXX = 0, sumXY = 0, sumYY = 0;
+    for (let pt of points) {
+      if (pt.clusterIndex === k) {
+        const dx = pt.x - mus[k].x;
+        const dy = pt.y - mus[k].y;
+        sumXX += dx * dx;
+        sumXY += dx * dy;
+        sumYY += dy * dy;
+      }
+    }
+    sumXX /= sums[k].count;
+    sumXY /= sums[k].count;
+    sumYY /= sums[k].count;
+    covariances[k] = [[sumXX, sumXY], [sumXY, sumYY]];
+  }
+}
+
+/*************************************************************
+ *   6) DESENHO
+ *************************************************************/
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawPoints();
+  if (iteration >= 1) {
+    drawElipsesAndCenters();
+  }
+}
+
+function toCanvasX(x) {
+  const ratio = (x - MIN_COORD) / (MAX_COORD - MIN_COORD);
+  return ratio * canvas.width;
+}
+function toCanvasY(y) {
+  const ratio = (y - MIN_COORD) / (MAX_COORD - MIN_COORD);
+  return canvas.height - ratio * canvas.height;
+}
+
+/* Desenha os pontos pequenos */
+function drawPoints() {
+  for (let pt of points) {
+    const cIndex = pt.clusterIndex;
+    const color = (cIndex < 0) ? "#bbb" : CLUSTER_COLORS[cIndex];
+    const cx = toCanvasX(pt.x);
+    const cy = toCanvasY(pt.y);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.8, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+}
+
+/* Desenha as elipses com shading e os pontos representativos dos clusters */
+function drawElipsesAndCenters() {
+  for (let k = 0; k < CLUSTERS; k++) {
+    drawCenterPoint(mus[k].x, mus[k].y, CLUSTER_COLORS[k]);
+    for (let i = 0; i < ELLIPSE_LEVELS.length; i++) {
+      let level = ELLIPSE_LEVELS[i];
+      let alpha = ELLIPSE_ALPHAS[i];
+      drawShadedEllipse(mus[k], covariances[k], level, CLUSTER_COLORS[k], alpha);
+    }
+  }
+}
+
+/* Desenha o centróide como um ponto maior com contorno preto */
+function drawCenterPoint(x, y, color) {
+  const cx = toCanvasX(x);
+  const cy = toCanvasY(y);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+/* Converte uma cor hexadecimal "#RRGGBB" para {r, g, b} */
+function hexToRGB(hex) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return { r, g, b };
+}
+
+/* Desenha uma elipse preenchida (shading) com contorno para visibilidade.
+   Se os raios calculados excederem MAX_ELLIPSE_RADIUS, a elipse não é desenhada. */
+function drawShadedEllipse(mu, cov, scale, baseColor, alpha) {
+  const { r, g, b } = hexToRGB(baseColor);
+  let a = cov[0][0], b_ = cov[0][1],
+      c_ = cov[1][0], d = cov[1][1];
+  let det = a * d - b_ * c_;
+  if (det < 1e-12) return;
+  const trace = a + d;
+  const disc = (trace * trace) / 4 - det;
+  if (disc < 0) return;
+  let lambda1 = trace / 2 + Math.sqrt(disc);
+  let lambda2 = trace / 2 - Math.sqrt(disc);
+  let v1x, v1y;
+  if (Math.abs(b_) > 1e-9) {
+    v1x = lambda1 - d; 
+    v1y = b_;
+  } else if (Math.abs(c_) > 1e-9) {
+    v1x = c_; 
+    v1y = lambda1 - a;
+  } else {
+    v1x = 1; 
+    v1y = 0;
+  }
+  let len1 = Math.sqrt(v1x * v1x + v1y * v1y);
+  v1x /= len1; 
+  v1y /= len1;
+  let v2x, v2y;
+  if (Math.abs(b_) > 1e-9) {
+    v2x = lambda2 - d; 
+    v2y = b_;
+  } else if (Math.abs(c_) > 1e-9) {
+    v2x = c_; 
+    v2y = lambda2 - a;
+  } else {
+    v2x = -v1y; 
+    v2y = v1x;
+  }
+  let len2 = Math.sqrt(v2x * v2x + v2y * v2y);
+  v2x /= len2; 
+  v2y /= len2;
+  let r1_val = Math.sqrt(Math.max(lambda1, 0)) * scale;
+  let r2_val = Math.sqrt(Math.max(lambda2, 0)) * scale;
+  // Se os raios forem maiores que o limite, não desenha a elipse
+  if (r1_val > MAX_ELLIPSE_RADIUS || r2_val > MAX_ELLIPSE_RADIUS) return;
+  
+  ctx.beginPath();
+  let steps = 80;
+  for (let i = 0; i <= steps; i++) {
+    let theta = 2 * Math.PI * (i / steps);
+    let ux = r1_val * Math.cos(theta);
+    let uy = r2_val * Math.sin(theta);
+    let ex = ux * v1x + uy * v2x;
+    let ey = ux * v1y + uy * v2y;
+    let px = toCanvasX(mu.x + ex);
+    let py = toCanvasY(mu.y + ey);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${r},${g},${b},0.5)`;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+/*************************************************************
+ *  7) LOOP DE ITERAÇÕES
+ *************************************************************/
+function doIteration() {
+  if (iteration >= ITERATIONS) {
+    // Quando finalizar, estabiliza (não reinicia)
+    clearInterval(intervalId);
+    intervalId = null;
+    return;
+  }
+  eStep();
+  mStep();
+  iteration++;
+  draw();
+}
+
+function startLoop() {
+  intervalId = setInterval(doIteration, INTERVAL_MS);
+}
+
+/*************************************************************
+ *   MAIN
+ *************************************************************/
+window.onload = () => {
+  canvas = document.getElementById("gmmCanvas");
+  ctx = canvas.getContext("2d");
+  init();
+  startLoop();
+};
+</script>
+</body>
+</html>
