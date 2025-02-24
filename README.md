@@ -1,4 +1,4 @@
-# Netflix Recommendation System
+# Collaborative Filtering with Netflix Movie Ratings
 
 <div align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python 3.8+"/>
@@ -7,10 +7,6 @@
   <img src="https://img.shields.io/badge/SciPy-1.6+-yellow.svg" alt="SciPy 1.6+"/>
   <img src="https://img.shields.io/badge/Matplotlib-3.3+-red.svg" alt="Matplotlib 3.3+"/>
 </div>
-
-<p align="center">
-  <img src="https://miro.medium.com/max/1400/1*T9BhgXQtPjEOXbp7xXj8dg.png" alt="Netflix Recommendation" width="700"/>
-</p>
 
 ## 🎬 Introduction
 
