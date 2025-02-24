@@ -27,10 +27,6 @@ Our task is to predict the missing entries in this sparse matrix to enable movie
 
 ### 1. Matrix Factorization (MF)
 
-<p align="center">
-  <img src="https://miro.medium.com/max/1400/1*YzCCddRvwkw7TND9XNJjVA.png" alt="Matrix Factorization" width="600"/>
-</p>
-
 Matrix Factorization decomposes the ratings matrix X into the product of two lower-dimensional matrices:
 
 ```
